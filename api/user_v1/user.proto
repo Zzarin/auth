@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package user;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "https://github.com/Zzarin/auth/pkg/user_v1;user_v1";
+
+service UserV1 {
+    rpc Create(CreateRequest) returns (CreateResponse);
+    rpc Get(GetRequest) returns (GetResponse);
+    rpc Update(UpdateRequest) returns (google.protobuf.Empty);
+    rpc Delete(DeleteRequest) returns (google.protobuf.Empty);
+}
+
+message UserInfo {
+    int64 id = 1;
+    User user = 2;
+    google.protobuf.Timestamp created_at = 3;
+    google.protobuf.Timestamp updated_at = 4;
+}
+
+message User {
+    string name = 2;
+    string email = 3;
+    UserRole role = 4;
+}
+
+enum UserRole {
+    UNKNOWN = 0;
+    USER = 1;
+    ADMIN = 2;
+}
+
+message AuthParameters {
+    string password = 1;
+    string passwrod_confirm = 2;
+}
+
+message CreateRequest {
+    User user = 1; 
+    AuthParameters auth_parameters = 2;
+}
+
+message CreateResponse {
+    int64 user_id = 1; 
+}
+
+message GetRequest {
+    int64 user_id = 1; 
+}
+
+message GetResponse {
+    UserInfo user_info = 1;
+}
+
+message UpdateRequest {
+    int64 user_id = 1; 
+    User user = 2;
+}
+
+message DeleteRequest {
+    int64 user_id = 1;
+}
