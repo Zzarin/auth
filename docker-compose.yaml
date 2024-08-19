@@ -1,0 +1,60 @@
+version: '3'
+
+volumes:
+  postgres_volume_local:  
+  postgres_volume_prod:  
+
+services:
+  auth-local:
+    environment:
+      - config-path=local.env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+        - "50051:50051"
+    depends_on:
+      - pg-local
+
+  auth-prod:
+    image: "${REGISTRY}/${AUTH_IMAGE_NAME}:${TAG_NAME}"
+    environment:
+      - config-path=prod.env
+    ports:
+      - "50052:50052"
+    depends_on:
+      - pg-prod
+
+  pg-local:
+    image: postgres:14-alpine3.17
+    env_file:
+      - "local.env"
+    ports:
+      - "5440:5432"
+    volumes:
+      - postgres_volume_local:/var/lib/postgresql/data
+  
+  pg-prod:
+    image: postgres:14-alpine3.17
+    env_file:
+      - "prod.env"
+    ports:
+      - "5441:5432"
+    volumes:
+      - postgres_volume_prod:/var/lib/postgresql/data
+
+  migrator-local:
+    build:
+      context: .
+      dockerfile: Dockerfile.migration_local
+    restart: on-failure
+    environment:
+        DB_HOST: pg-local
+  
+  migrator-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile.migration_prod
+    restart: on-failure
+    environment:
+        DB_HOST: pg-prod
