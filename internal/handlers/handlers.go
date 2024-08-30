@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -22,6 +21,18 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+const (
+	userTable               = "users"
+	tableID                 = "id"
+	tableName               = "name"
+	tablePasswordHash       = "password_hash"
+	tablePeasswordConfirmed = "password_confirmed"
+	tableEmail              = "email"
+	tableRole               = "role"
+	tableCreatedAt          = "created_at"
+	tableUpdatedAt          = "updated_at"
 )
 
 var dbTimeOutDefault = time.Duration(5 * time.Second)
@@ -89,7 +100,7 @@ type UserCreateRequest struct {
 	PasswordConfirmed bool
 }
 
-func getUserFromCreateRequest(rpcUser *rpc.User, passwordConfirmed bool, passwordHash string) UserCreateRequest {
+func convertCreateRequestToUser(rpcUser *rpc.User, passwordConfirmed bool, passwordHash string) UserCreateRequest {
 	return UserCreateRequest{
 		PersonalInfo: User{
 			Name:  rpcUser.GetName(),
@@ -102,20 +113,16 @@ func getUserFromCreateRequest(rpcUser *rpc.User, passwordConfirmed bool, passwor
 }
 
 func (u *UserHandler) Create(ctx context.Context, req *rpc.CreateRequest) (*rpc.CreateResponse, error) {
-	rpcUser := req.GetUser()
-	authInfo := req.GetAuthParameters()
-	passwordHash, err := HashPassword(authInfo.Password)
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.GetAuthParameters().Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "password is in wrong format")
 	}
 
-	user := getUserFromCreateRequest(rpcUser, authInfo.GetPasswordConfirmed(), passwordHash)
+	user := convertCreateRequestToUser(req.GetUser(), req.GetAuthParameters().GetPasswordConfirmed(), string(passwordHash))
 
-	fmt.Println(user)
-
-	builderInsert := sq.Insert("users").
+	builderInsert := sq.Insert(userTable).
 		PlaceholderFormat(sq.Dollar).
-		Columns("name", "password_hash", "password_confirmed", "email", "role").
+		Columns(tableName, tablePasswordHash, tablePeasswordConfirmed, tableEmail, tableRole).
 		Values(user.PersonalInfo.Name, passwordHash, user.PasswordConfirmed, user.PersonalInfo.Email, user.PersonalInfo.Role).
 		Suffix("RETURNING id")
 
@@ -125,17 +132,17 @@ func (u *UserHandler) Create(ctx context.Context, req *rpc.CreateRequest) (*rpc.
 		return nil, status.Error(codes.Internal, "preparing query")
 	}
 
-	var userID int
 	ctxDB, cancel := context.WithTimeout(ctx, dbTimeOutDefault)
 	defer cancel()
 
+	var userID int64
 	err = u.dbConn.QueryRow(ctxDB, query, args...).Scan(&userID)
 	if err != nil {
 		log.Printf("user: %v, %v", user, errors.Wrap(err, "QueryRow"))
 		return nil, status.Error(codes.Internal, "writing in db")
 	}
 
-	return &rpc.CreateResponse{UserId: int64(userID)}, nil
+	return &rpc.CreateResponse{UserId: userID}, nil
 }
 
 type UserGetResponse struct {
@@ -152,30 +159,29 @@ type User struct {
 }
 
 func (u *UserHandler) Get(ctx context.Context, req *rpc.GetRequest) (*rpc.GetResponse, error) {
-	userID := req.GetUserId()
-	fmt.Println(userID)
+	builderInsert := sq.Select(tableID, tableName, tableEmail, tableRole, tableCreatedAt, tableUpdatedAt).
+		PlaceholderFormat(sq.Dollar).
+		From(userTable).
+		Where(sq.Eq{tableID: req.GetUserId()})
+
+	query, args, err := builderInsert.ToSql()
+	if err != nil {
+		log.Printf("user_id: %v, %v", req.GetUserId(), errors.Wrap(err, "ToSql"))
+		return nil, status.Error(codes.Internal, "preparing query")
+	}
 
 	ctxDB, cancel := context.WithTimeout(ctx, dbTimeOutDefault)
 	defer cancel()
 
-	builderInsert := sq.Select("id", "name", "email", "role", "created_at", "updated_at").
-		PlaceholderFormat(sq.Dollar).
-		From("users").
-		Where(sq.Eq{"id": userID})
-
-	query, args, err := builderInsert.ToSql()
-	if err != nil {
-		log.Printf("user_id: %v, %v", userID, errors.Wrap(err, "ToSql"))
-		return nil, status.Error(codes.Internal, "preparing query")
-	}
-
 	row := u.dbConn.QueryRow(ctxDB, query, args...)
-	userResponse, err := getUserFromRow(row)
-	if err != nil && err != pgx.ErrNoRows {
-		log.Printf("user_id: %v, %v", userID, errors.Wrap(err, "getUserFromRow"))
+	userResponse, err := convertRowToUser(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "no records found")
+		}
+
+		log.Printf("user_id: %v, %v", req.GetUserId(), errors.Wrap(err, "getUserFromRow"))
 		return nil, status.Error(codes.Internal, "get from db")
-	} else if err == pgx.ErrNoRows {
-		return nil, status.Error(codes.NotFound, "no records found")
 	}
 
 	return &rpc.GetResponse{
@@ -186,13 +192,13 @@ func (u *UserHandler) Get(ctx context.Context, req *rpc.GetRequest) (*rpc.GetRes
 				Email: userResponse.User.Email,
 				Role:  stringToUserRole(userResponse.User.Role),
 			},
-			CreatedAt: &timestamppb.Timestamp{Seconds: userResponse.CreatedAt.Unix()},
+			CreatedAt: timestamppb.New(*userResponse.CreatedAt),
 			UpdatedAt: getTimeOrNil(userResponse.UpdatedAt),
 		},
 	}, nil
 }
 
-func getUserFromUpdateRequest(rpcUser *rpc.User, userID int64) User {
+func convertRequestToUser(rpcUser *rpc.User, userID int64) User {
 	return User{
 		ID:    userID,
 		Name:  rpcUser.GetName(),
@@ -202,17 +208,12 @@ func getUserFromUpdateRequest(rpcUser *rpc.User, userID int64) User {
 }
 
 func (u *UserHandler) Update(ctx context.Context, req *rpc.UpdateRequest) (*emptypb.Empty, error) {
-	userID := req.GetUserId()
-	rpcUser := req.GetUser()
+	user := convertRequestToUser(req.GetUser(), req.GetUserId())
 
-	user := getUserFromUpdateRequest(rpcUser, userID)
-
-	fmt.Println(user)
-
-	builderInsert := sq.Update("users").
+	builderInsert := sq.Update(userTable).
 		PlaceholderFormat(sq.Dollar).
-		Set("name", user.Name).Set("email", user.Email).Set("role", user.Role).
-		Where(sq.Eq{"id": userID})
+		Set(tableName, user.Name).Set(tableEmail, user.Email).Set(tableRole, user.Role).
+		Where(sq.Eq{tableID: req.GetUserId()})
 
 	query, args, err := builderInsert.ToSql()
 	if err != nil {
@@ -237,25 +238,22 @@ func (u *UserHandler) Update(ctx context.Context, req *rpc.UpdateRequest) (*empt
 }
 
 func (u *UserHandler) Delete(ctx context.Context, req *rpc.DeleteRequest) (*emptypb.Empty, error) {
-	userID := req.GetUserId()
-	fmt.Println(userID)
+	builderDelete := sq.Delete(userTable).
+		PlaceholderFormat(sq.Dollar).
+		Where(sq.Eq{tableID: req.GetUserId()})
+
+	query, args, err := builderDelete.ToSql()
+	if err != nil {
+		log.Printf("user_id: %v, %v", req.GetUserId(), errors.Wrap(err, "ToSql"))
+		return nil, status.Error(codes.Internal, "preparing query")
+	}
 
 	ctxDB, cancel := context.WithTimeout(ctx, dbTimeOutDefault)
 	defer cancel()
 
-	builderDelete := sq.Delete("users").
-		PlaceholderFormat(sq.Dollar).
-		Where(sq.Eq{"id": userID})
-
-	query, args, err := builderDelete.ToSql()
-	if err != nil {
-		log.Printf("user_id: %v, %v", userID, errors.Wrap(err, "ToSql"))
-		return nil, status.Error(codes.Internal, "preparing query")
-	}
-
 	tag, err := u.dbConn.Exec(ctxDB, query, args...)
 	if err != nil {
-		log.Printf("user_id: %v, %v", userID, errors.Wrap(err, "Exec"))
+		log.Printf("user_id: %v, %v", req.GetUserId(), errors.Wrap(err, "Exec"))
 		return nil, status.Error(codes.Internal, "executing query")
 	}
 
@@ -266,22 +264,7 @@ func (u *UserHandler) Delete(ctx context.Context, req *rpc.DeleteRequest) (*empt
 	return &emptypb.Empty{}, nil
 }
 
-func HashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", errors.Wrap(err, "GenerateFromPassword")
-	}
-	return string(hash), nil
-}
-
-func CheckPasswordHash(password, hash string) error {
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
-		return errors.Wrap(err, "CompareHashAndPassword")
-	}
-	return nil
-}
-
-func getUserFromRow(row pgx.Row) (*UserGetResponse, error) {
+func convertRowToUser(row pgx.Row) (*UserGetResponse, error) {
 	var userResponse UserGetResponse
 	if err := row.Scan(
 		&userResponse.User.ID,
@@ -290,10 +273,11 @@ func getUserFromRow(row pgx.Row) (*UserGetResponse, error) {
 		&userResponse.User.Role,
 		&userResponse.CreatedAt,
 		&userResponse.UpdatedAt,
-	); err != nil && err != pgx.ErrNoRows {
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, err
+		}
 		return nil, errors.Wrap(err, "error row.Scan")
-	} else if err == pgx.ErrNoRows {
-		return nil, err
 	}
 
 	return &userResponse, nil
@@ -314,5 +298,5 @@ func getTimeOrNil(inputTime *time.Time) *timestamppb.Timestamp {
 	if inputTime == nil {
 		return nil
 	}
-	return &timestamppb.Timestamp{Seconds: inputTime.Unix()}
+	return timestamppb.New(*inputTime)
 }

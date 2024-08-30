@@ -6,11 +6,11 @@ import (
 )
 
 type GRPCConfig interface {
-	GetAddress() string
+	Address() string
 }
 
 type DBConfig interface {
-	GetDSN() string
+	DSN() string
 }
 
 func Load(path string) error {

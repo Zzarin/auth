@@ -28,6 +28,6 @@ func NewPGConfig() (config.DBConfig, error) {
 	}, nil
 }
 
-func (p *pgConfig) GetDSN() string {
-	return p.dsn
+func (cfg *pgConfig) DSN() string {
+	return cfg.dsn
 }
