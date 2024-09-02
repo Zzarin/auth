@@ -97,10 +97,10 @@ func (u *UserHandler) Stop() {
 type UserCreateRequest struct {
 	PersonalInfo      User
 	PasswordHash      string
-	PasswordConfirmed bool
+	PasswordConfirmed string
 }
 
-func convertCreateRequestToUser(rpcUser *rpc.User, passwordConfirmed bool, passwordHash string) UserCreateRequest {
+func convertCreateRequestToUser(rpcUser *rpc.User, passwordConfirmed string, passwordHash string) UserCreateRequest {
 	return UserCreateRequest{
 		PersonalInfo: User{
 			Name:  rpcUser.GetName(),
