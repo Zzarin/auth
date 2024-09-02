@@ -1,2 +1,6 @@
 .idea
+.vscode
 /bin/
+
+local.env
+prod.env

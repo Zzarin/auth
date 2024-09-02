@@ -35,7 +35,7 @@ enum UserRole {
 
 message AuthParameters {
     string password = 1;
-    string passwrod_confirm = 2;
+    string password_confirmed = 2;
 }
 
 message CreateRequest {
